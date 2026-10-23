@@ -15,6 +15,7 @@ namespace PInvokeTesting
             {
 #if BENCHMARKS
                 BenchmarkRunner.Run<InsertBenchmarks>();
+                BenchmarkRunner.Run<ReadBenchmarks>();
                 return 0;
 #else
                 Console.Error.WriteLine("Benchmarks need the JIT: run `dotnet run -c Release -- bench` instead.");
@@ -81,6 +82,62 @@ namespace PInvokeTesting
                 Check(view.Text == "hey dotnet!" && view.Length == 11, "backspace removes a whole two-byte character");
             }
 
+            // Lapce's rope, through the same handle and borrow design.
+            using (var rope = new RopeView())
+            {
+                Check(rope.Text == "hey dotnet!", "rope: initial text reads back");
+
+                rope.Edit(4, 10, "lapce");
+                Check(rope.Text == "hey lapce!", $"rope: replacing a range in the middle: \"{rope.Text}\"");
+
+                rope.Insert(" — 🦀");
+                rope.DeleteBackward();
+                Check(rope.Text == "hey lapce! — " && rope.Length == 15, "rope: backspace removes a whole four-byte character");
+
+                try
+                {
+                    rope.Edit(12, 13, "x"); // byte 12 is inside "—"
+                    Check(false, "rope: an edit splitting a character is refused");
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    Check(rope.Text == "hey lapce! — ", "rope: an edit splitting a character is refused, not applied");
+                }
+
+                // Grow it past a few leaves, mixing in multi-byte characters.
+                var line = Encoding.UTF8.GetBytes("héllo, rope — 🦀 line of text\n");
+                for (var i = 0; i < 200; i++)
+                    rope.Insert(line);
+
+                using (var text = rope.BorrowText())
+                {
+                    int leaves = 0, largest = 0;
+                    var everyLeafValid = true;
+                    var strict = new UTF8Encoding(false, throwOnInvalidBytes: true);
+                    foreach (var leaf in text)
+                    {
+                        leaves++;
+                        largest = Math.Max(largest, leaf.Length);
+                        try { strict.GetCharCount(leaf); }
+                        catch (DecoderFallbackException) { everyLeafValid = false; }
+                    }
+                    Check(leaves > 1 && largest <= 1024, $"rope: {text.Length} bytes read in place from {leaves} leaves of at most {largest} bytes");
+                    Check(everyLeafValid, "rope: no character is split across two leaves");
+                    Check(text.Length == rope.Length, "rope: the leaves add up to its length");
+                }
+
+                var ropeBorrow = rope.BorrowText();
+                rope.Dispose();
+                Check(RopeBindings.LiveRopes == 1, "rope: an open borrow keeps a disposed rope alive");
+                ropeBorrow.Dispose();
+            }
+            Check(RopeBindings.LiveRopes == 0, "rope: closing the borrow frees it");
+
+            LeakRopes(1000);
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            Check(RopeBindings.LiveRopes == 0, $"rope: finalizer freed every undisposed rope (live: {RopeBindings.LiveRopes})");
+
             // The same edits over the pipe, as the benchmark makes them.
             using (var rpc = new PInvokeTesting.Benchmarks.RpcClient())
             {
@@ -146,6 +203,13 @@ namespace PInvokeTesting
             return text.ToString();
         }
 #endif
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        static void LeakRopes(int count)
+        {
+            for (var i = 0; i < count; i++)
+                new RopeView().Insert("x");
+        }
 
         // Separate method so no local keeps the views reachable during the GC.
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]

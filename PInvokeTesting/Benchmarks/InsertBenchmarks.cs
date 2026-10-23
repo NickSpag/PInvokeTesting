@@ -13,12 +13,14 @@ namespace PInvokeTesting.Benchmarks
     public class InsertBenchmarks
     {
         RustView _view;
+        RopeView _rope;
         RpcClient _rpc;
 
         [GlobalSetup]
         public void Setup()
         {
             _view = new RustView();
+            _rope = new RopeView();
             _rpc = new RpcClient();
         }
 
@@ -29,6 +31,18 @@ namespace PInvokeTesting.Benchmarks
             _view.Insert("x"u8);
             _view.DeleteBackward();
             return _view.Length;
+        }
+
+        /// <summary>
+        /// The same two edits on Lapce's rope. No update callback: Lapce's UI owns
+        /// the rope, so nothing needs telling.
+        /// </summary>
+        [Benchmark]
+        public long RopeInProcess()
+        {
+            _rope.Insert("x"u8);
+            _rope.DeleteBackward();
+            return _rope.Length;
         }
 
         /// <summary>Two JSON round trips through the Rust process's stdin and stdout.</summary>
@@ -43,6 +57,7 @@ namespace PInvokeTesting.Benchmarks
         public void Cleanup()
         {
             _rpc?.Dispose();
+            _rope?.Dispose();
             _view?.Dispose();
         }
     }

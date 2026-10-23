@@ -20,12 +20,20 @@ namespace PInvokeTesting
         readonly Lease _lease;
         readonly ReadOnlySequence<byte> _text;
 
-        internal TextBorrow(RustViewHandle handle)
+        internal TextBorrow(NativeTextHandle handle)
         {
             _lease = new Lease(handle);
-            // Sound: the lease keeps the view from being freed until Dispose. That
-            // an edit also invalidates the text is documented, not enforced.
-            _text = unsafe(RustBindings.BorrowText(handle));
+            try
+            {
+                // Sound: the lease keeps the view from being freed until Dispose.
+                // That an edit also invalidates the text is documented, not enforced.
+                _text = unsafe(handle.ReadText());
+            }
+            catch
+            {
+                _lease.Release();
+                throw;
+            }
         }
 
         public long Length => _text.Length;
@@ -57,10 +65,10 @@ namespace PInvokeTesting
         /// </summary>
         sealed class Lease
         {
-            readonly RustViewHandle _handle;
+            readonly NativeTextHandle _handle;
             int _released;
 
-            public Lease(RustViewHandle handle)
+            public Lease(NativeTextHandle handle)
             {
                 var added = false;
                 handle.DangerousAddRef(ref added);
