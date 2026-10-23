@@ -39,28 +39,48 @@ pub unsafe extern "C" fn insert_text(ptr: *mut RustView, text: *const u8, len: u
         if ptr.is_null() || (text.is_null() && len != 0) {
             return FFI_NULL_ARGUMENT;
         }
-        let view = &mut *ptr;
         let bytes = if len == 0 { &[][..] } else { std::slice::from_raw_parts(text, len) };
-        match std::str::from_utf8(bytes) {
-            Ok(text_str) => {
-                view.insert(text_str);
-                FFI_OK
-            }
-            Err(_) => FFI_INVALID_UTF8,
+        let text_str = match std::str::from_utf8(bytes) {
+            Ok(text_str) => text_str,
+            Err(_) => return FFI_INVALID_UTF8,
+        };
+        // The &mut has to end before the callback runs: C# reads the view back
+        // from inside it, and a shared borrow alongside a live &mut is UB.
+        let on_update = {
+            let view = &mut *ptr;
+            view.insert(text_str);
+            view.on_update()
+        };
+        if let Some((callback, user_data)) = on_update {
+            callback(user_data);
         }
+        FFI_OK
     })
 }
 
-/// Lends the view's UTF-8 bytes. The pointer is valid only until the next call
-/// that mutates or frees the view: an edit may reallocate the String.
+/// How many chunks the view's text is split into.
 #[no_mangle]
-pub unsafe extern "C" fn view_text(ptr: *const RustView, out_len: *mut usize) -> *const u8 {
+pub unsafe extern "C" fn view_chunk_count(ptr: *const RustView) -> usize {
+    if ptr.is_null() {
+        return 0;
+    }
+    (*ptr).chunks().len()
+}
+
+/// Lends one chunk's UTF-8 bytes. Valid only until the next call that mutates
+/// or frees the view.
+#[no_mangle]
+pub unsafe extern "C" fn view_chunk(ptr: *const RustView, index: usize, out_len: *mut usize) -> *const u8 {
     if ptr.is_null() || out_len.is_null() {
         return std::ptr::null();
     }
-    let text = (*ptr).text();
-    *out_len = text.len();
-    text.as_ptr()
+    match (*ptr).chunks().get(index) {
+        Some(chunk) => {
+            *out_len = chunk.len();
+            chunk.as_ptr()
+        }
+        None => std::ptr::null(),
+    }
 }
 
 /// Registers a callback run after every edit, or clears it when `callback` is null.

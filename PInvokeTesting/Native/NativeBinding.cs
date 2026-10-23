@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Runtime.InteropServices;
 
 namespace PInvokeTesting
@@ -23,7 +24,7 @@ namespace PInvokeTesting
         /// for it, which stays valid only while the delegate object is alive.
         /// </summary>
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        public delegate void UpdateCallback(IntPtr userData, byte* text, UIntPtr len);
+        public delegate void UpdateCallback(IntPtr userData);
 
         [DllImport(NativeLibrary, EntryPoint = "create_view", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
         private static extern RustViewHandle _create_view();
@@ -34,8 +35,11 @@ namespace PInvokeTesting
         [DllImport(NativeLibrary, EntryPoint = "insert_text", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
         private static extern int _insert_text(RustViewHandle view, byte* text, UIntPtr len);
 
-        [DllImport(NativeLibrary, EntryPoint = "view_text", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern byte* _view_text(RustViewHandle view, out UIntPtr len);
+        [DllImport(NativeLibrary, EntryPoint = "view_chunk_count", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+        private static extern UIntPtr _view_chunk_count(RustViewHandle view);
+
+        [DllImport(NativeLibrary, EntryPoint = "view_chunk", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+        private static extern byte* _view_chunk(RustViewHandle view, UIntPtr index, out UIntPtr len);
 
         [DllImport(NativeLibrary, EntryPoint = "set_update_callback", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
         private static extern int _set_update_callback(RustViewHandle view, UpdateCallback callback, IntPtr userData);
@@ -52,10 +56,25 @@ namespace PInvokeTesting
             }
         }
 
-        public static ReadOnlySpan<byte> BorrowText(RustViewHandle view)
+        /// <summary>
+        /// Links Rust's chunks into one sequence without copying a byte. Valid
+        /// only until the next edit or until the view is freed; nothing enforces it.
+        /// </summary>
+        public static ReadOnlySequence<byte> BorrowText(RustViewHandle view)
         {
-            var text = _view_text(view, out var len);
-            return text == null ? default : new ReadOnlySpan<byte>(text, checked((int)len));
+            var count = checked((int)_view_chunk_count(view));
+            ChunkSegment first = null, last = null;
+            for (var i = 0; i < count; i++)
+            {
+                var chunk = _view_chunk(view, (UIntPtr)i, out var len);
+                if (chunk == null)
+                    break;
+                var memory = new UnmanagedChunk(chunk, checked((int)len)).Memory;
+                last = last == null ? (first = new ChunkSegment(memory)) : last.Append(memory);
+            }
+            return first == null
+                ? ReadOnlySequence<byte>.Empty
+                : new ReadOnlySequence<byte>(first, 0, last, last.Memory.Length);
         }
 
         public static int SetUpdateCallback(RustViewHandle view, UpdateCallback callback, IntPtr userData)

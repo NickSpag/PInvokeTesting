@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -35,8 +36,14 @@ namespace PInvokeTesting
                 throw new InvalidOperationException($"insert_text failed with status {status}");
         }
 
+        /// <summary>
+        /// Rust's chunks, read in place. Valid only until the next edit or until
+        /// the view is disposed: hold on to it longer and it reads freed memory.
+        /// </summary>
+        public ReadOnlySequence<byte> TextSequence => RustBindings.BorrowText(_rustView);
+
         /// <summary>Copies the text out, so nothing outlives Rust's buffer.</summary>
-        public string Text => Encoding.UTF8.GetString(RustBindings.BorrowText(_rustView));
+        public string Text => Encoding.UTF8.GetString(TextSequence.ToArray());
 
         // Rust keeps the native thunk for as long as any view lives, so the
         // delegate behind it must never be collected: one static instance,
@@ -44,13 +51,13 @@ namespace PInvokeTesting
         // classic crash here, because nothing on the managed side references it.
         static readonly RustBindings.UpdateCallback s_onUpdate = OnUpdate;
 
-        static void OnUpdate(IntPtr userData, byte* text, UIntPtr len)
+        static void OnUpdate(IntPtr userData)
         {
             // An exception may not cross back into Rust either.
             try
             {
                 if (GCHandle.FromIntPtr(userData).Target is RustView view)
-                    view.Updated?.Invoke(Encoding.UTF8.GetString(text, checked((int)len)));
+                    view.Updated?.Invoke(view.Text);
             }
             catch (Exception ex)
             {

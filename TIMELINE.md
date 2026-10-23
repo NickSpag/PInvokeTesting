@@ -7,6 +7,7 @@ two neighbours is exactly one improvement. Every branch builds and passes
 | Branch | Available since | What changes |
 |---|---|---|
 | `timeline/00-baseline-2020` | C# 8 / .NET Core 3.1 (2019) | The working fix, written with only what 2020 had |
+| `timeline/01-readonlysequence` | .NET Core 2.1 (2018) | Rust's text in chunks, read in place as a `ReadOnlySequence<byte>` |
 
 ## 00 — baseline, 2020
 
@@ -27,3 +28,27 @@ what this project targeted when it was written.
 
 The runtime is newer than 3.1 (which is out of support); `LangVersion` 8.0
 keeps the language honest, and the API surface is kept to 3.1's by hand.
+
+## 01 — `ReadOnlySequence<byte>` (.NET Core 2.1, 2018)
+
+Available in 2020 and not used, so it comes first. xi keeps text in a rope, a
+tree of string chunks, so there is no single buffer for a span to point at.
+The Rust view now stores its text the same way (16-byte chunks, small so the
+demo spans several, never splitting a UTF-8 character), and C# reads it as a
+`ReadOnlySequence<byte>`: the type .NET has for a chain of non-contiguous
+memory, built for pipelines.
+
+- **`UnmanagedChunk : MemoryManager<byte>`** turns a Rust pointer and length
+  into a `Memory<byte>`, which is what a sequence segment holds. It owns
+  nothing; Rust frees the bytes and the GC never moves them.
+- **`ChunkSegment : ReadOnlySequenceSegment<byte>`** links them; each knows where
+  it starts in the whole text.
+- **No byte is copied** to read the text. Only `Text`, which builds a `string`,
+  copies.
+- **The callback carries no text any more**, since there is no contiguous text to
+  pass; C# reads the view back from inside it. That exposed a Rust aliasing rule:
+  `insert_text` now ends its `&mut` borrow of the view *before* calling back,
+  because C# then takes a shared borrow of the same view.
+
+What this does **not** fix: the sequence is valid only until the next edit or
+until the view is freed, and nothing stops C# holding it longer. That is next.

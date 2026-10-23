@@ -34,6 +34,14 @@ namespace PInvokeTesting
                 Check(view.Text == "hey dotnet! — héllo, 🦀", $"non-ASCII insert round-trips: \"{view.Text}\"");
                 Check(lastUpdate == view.Text, "Rust called back into C# with the new text");
 
+                // 28 bytes so far; "x" leaves 3 bytes of room in the 16-byte chunk, and
+                // the second "é" lands with one byte to spare, where it can't fit.
+                view.Insert("xéé");
+                var sequence = view.TextSequence;
+                Check(!sequence.IsSingleSegment, $"text is read in place from {CountSegments(sequence)} Rust chunks, not one buffer");
+                Check(sequence.Length == Encoding.UTF8.GetByteCount(view.Text), "sequence length matches the UTF-8 byte count");
+                Check(EveryChunkIsValidUtf8(sequence), "no character is split across two chunks");
+
                 view.Insert("a\0b");
                 Check(view.Text.EndsWith("a\0b"), "embedded NUL survives (length-prefixed, not C string)");
 
@@ -68,6 +76,29 @@ namespace PInvokeTesting
             }
 
             return failures == 0 ? 0 : 1;
+        }
+
+        static int CountSegments(System.Buffers.ReadOnlySequence<byte> sequence)
+        {
+            var count = 0;
+            foreach (var _ in sequence)
+                count++;
+            return count;
+        }
+
+        static bool EveryChunkIsValidUtf8(System.Buffers.ReadOnlySequence<byte> sequence)
+        {
+            var strict = new UTF8Encoding(false, throwOnInvalidBytes: true);
+            try
+            {
+                foreach (var chunk in sequence)
+                    strict.GetCharCount(chunk.Span);
+                return true;
+            }
+            catch (DecoderFallbackException)
+            {
+                return false;
+            }
         }
 
         // Separate method so no local keeps the views reachable during the GC.
