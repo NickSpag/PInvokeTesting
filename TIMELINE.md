@@ -9,6 +9,7 @@ two neighbours is exactly one improvement. Every branch builds and passes
 | `timeline/00-baseline-2020` | C# 8 / .NET Core 3.1 (2019) | The working fix, written with only what 2020 had |
 | `timeline/01-readonlysequence` | .NET Core 2.1 (2018) | Rust's text in chunks, read in place as a `ReadOnlySequence<byte>` |
 | `timeline/02-scoped-borrow` | C# 7.2 (2017), C# 8 (2019) | A `ref struct` borrow keeps the view alive and can't escape the method |
+| `timeline/03-net5-function-pointers` | C# 9 / .NET 5 (Nov 2020) | Function pointers replace the callback delegate; `SuppressGCTransition` |
 
 ## 00 — baseline, 2020
 
@@ -85,3 +86,21 @@ both halves of that:
 What the compiler does *not* catch: inside one method, a span read from the
 borrow can still be used after the borrow's `Dispose`, and editing the view
 while a borrow is open invalidates it. Rust's borrow checker would reject both.
+
+## 03 — function pointers (C# 9 / .NET 5, November 2020)
+
+Six months after this project's last commit.
+
+- **`delegate* unmanaged[Cdecl]` + `[UnmanagedCallersOnly]` replace the delegate.**
+  `&OnUpdate` is the address of a real native entry point the runtime generates
+  for a static method. There is no delegate object, so there is no keep-alive:
+  the static field step 00 needed, and the crash you get without it, are gone.
+  It's also cheaper to call, since no marshalling thunk sits in between.
+- **`nuint`** spells `size_t` directly instead of `UIntPtr`.
+- **`[SuppressGCTransition]`** on `view_chunk_count`, `view_chunk` and
+  `live_views`. Every P/Invoke normally switches the thread to preemptive GC
+  mode and back; for a call that runs a few instructions, that switch costs
+  more than the call. It is only safe for functions that never block, never
+  take long and never call back into .NET — a GC can't proceed while one runs.
+- **`Encoding.GetString(in ReadOnlySequence<byte>)`** decodes across the chunks
+  directly, without the intermediate `ToArray()`.
