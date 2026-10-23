@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -89,15 +90,24 @@ namespace PInvokeTesting
 
     }
 
-    public class RustViewHandle : SafeHandle
+    /// <summary>A handle to Rust-owned text that a <see cref="TextBorrow"/> can read.</summary>
+    public abstract class NativeTextHandle : SafeHandle
     {
-        public RustViewHandle() : base(IntPtr.Zero, true)
+        protected NativeTextHandle() : base(IntPtr.Zero, true)
         { }
+
+        public override bool IsInvalid => handle == IntPtr.Zero;
+
+        /// <summary>The text in place; valid until the next edit or free, which the caller must guarantee.</summary>
+        internal abstract unsafe ReadOnlySequence<byte> ReadText();
+    }
+
+    public class RustViewHandle : NativeTextHandle
+    {
+        internal override unsafe ReadOnlySequence<byte> ReadText() => unsafe(RustBindings.BorrowText(this));
 
         /// <summary>The managed RustView that Rust passes back to the update callback.</summary>
         internal GCHandle Owner;
-
-        public override bool IsInvalid => handle == IntPtr.Zero;
 
         protected override bool ReleaseHandle()
         {

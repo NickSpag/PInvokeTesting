@@ -1,6 +1,7 @@
 // Edition 2024 warns about this; C# 15 makes its counterpart an error, so match it.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod rope;
 pub mod view;
 
 use std::ffi::c_void;
@@ -13,10 +14,11 @@ pub const FFI_OK: i32 = 0;
 pub const FFI_NULL_ARGUMENT: i32 = 1;
 pub const FFI_INVALID_UTF8: i32 = 2;
 pub const FFI_PANIC: i32 = 3;
+pub const FFI_INVALID_RANGE: i32 = 4;
 
 /// Unwinding out of an `extern "C"` fn is undefined behaviour (it aborts on
 /// Rust 1.81+), so every export runs its body through this.
-fn guarded(body: impl FnOnce() -> i32) -> i32 {
+pub(crate) fn guarded(body: impl FnOnce() -> i32) -> i32 {
     catch_unwind(AssertUnwindSafe(body)).unwrap_or(FFI_PANIC)
 }
 
