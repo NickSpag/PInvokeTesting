@@ -1,6 +1,12 @@
 using System;
 using System.Buffers;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.Marshalling;
+
+// Nothing in this assembly may rely on the runtime's built-in marshalling: every
+// signature must be blittable, or be handled by the LibraryImport generator.
+[assembly: DisableRuntimeMarshalling]
 
 namespace PInvokeTesting
 {
@@ -8,7 +14,7 @@ namespace PInvokeTesting
     /// I want direct access to the rust View. Giving it a callback, so that it can directly send notifications like Update/ScrollTo/etc
     /// </summary>
 
-    public static unsafe class RustBindings
+    public static unsafe partial class RustBindings
     {
         // Resolved next to the executable; the csproj copies the dylib there.
         private const string NativeLibrary = "ffi_test";
@@ -18,32 +24,39 @@ namespace PInvokeTesting
         public const int InvalidUtf8 = 2;
         public const int Panic = 3;
 
-        [DllImport(NativeLibrary, EntryPoint = "create_view", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern RustViewHandle _create_view();
+        [LibraryImport(NativeLibrary, EntryPoint = "create_view")]
+        [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static partial RustViewHandle _create_view();
 
-        [DllImport(NativeLibrary, EntryPoint = "free_view", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern void _free_view(IntPtr view);
+        [LibraryImport(NativeLibrary, EntryPoint = "free_view")]
+        [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static partial void _free_view(IntPtr view);
 
-        [DllImport(NativeLibrary, EntryPoint = "insert_text", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int _insert_text(RustViewHandle view, byte* text, nuint len);
-
-        // A few instructions that never block or call back: skip the GC transition.
-        [SuppressGCTransition]
-        [DllImport(NativeLibrary, EntryPoint = "view_chunk_count", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern nuint _view_chunk_count(RustViewHandle view);
+        [LibraryImport(NativeLibrary, EntryPoint = "insert_text")]
+        [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static partial int _insert_text(RustViewHandle view, byte* text, nuint len);
 
         // A few instructions that never block or call back: skip the GC transition.
         [SuppressGCTransition]
-        [DllImport(NativeLibrary, EntryPoint = "view_chunk", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern byte* _view_chunk(RustViewHandle view, nuint index, out nuint len);
-
-        [DllImport(NativeLibrary, EntryPoint = "set_update_callback", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int _set_update_callback(RustViewHandle view, delegate* unmanaged[Cdecl]<IntPtr, void> callback, IntPtr userData);
+        [LibraryImport(NativeLibrary, EntryPoint = "view_chunk_count")]
+        [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static partial nuint _view_chunk_count(RustViewHandle view);
 
         // A few instructions that never block or call back: skip the GC transition.
         [SuppressGCTransition]
-        [DllImport(NativeLibrary, EntryPoint = "live_views", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern nuint _live_views();
+        [LibraryImport(NativeLibrary, EntryPoint = "view_chunk")]
+        [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static partial byte* _view_chunk(RustViewHandle view, nuint index, out nuint len);
+
+        [LibraryImport(NativeLibrary, EntryPoint = "set_update_callback")]
+        [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static partial int _set_update_callback(RustViewHandle view, delegate* unmanaged[Cdecl]<IntPtr, void> callback, IntPtr userData);
+
+        // A few instructions that never block or call back: skip the GC transition.
+        [SuppressGCTransition]
+        [LibraryImport(NativeLibrary, EntryPoint = "live_views")]
+        [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static partial nuint _live_views();
 
 
         public static int InsertUtf8(RustViewHandle view, ReadOnlySpan<byte> utf8)

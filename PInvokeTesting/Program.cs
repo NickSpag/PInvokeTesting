@@ -36,7 +36,7 @@ namespace PInvokeTesting
 
                 // 28 bytes so far; "x" leaves 3 bytes of room in the 16-byte chunk, and
                 // the second "é" lands with one byte to spare, where it can't fit.
-                view.Insert("xéé");
+                view.Insert("xéé"u8);
                 using (var text = view.BorrowText())
                 {
                     var chunks = 0;
@@ -53,7 +53,7 @@ namespace PInvokeTesting
                     Check(everyChunkValid, "no character is split across two chunks");
                 }
 
-                view.Insert("a\0b");
+                view.Insert("a\0b"u8);
                 Check(view.Text.EndsWith("a\0b"), "embedded NUL survives (length-prefixed, not C string)");
 
                 try

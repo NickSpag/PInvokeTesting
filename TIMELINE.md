@@ -10,6 +10,7 @@ two neighbours is exactly one improvement. Every branch builds and passes
 | `timeline/01-readonlysequence` | .NET Core 2.1 (2018) | Rust's text in chunks, read in place as a `ReadOnlySequence<byte>` |
 | `timeline/02-scoped-borrow` | C# 7.2 (2017), C# 8 (2019) | A `ref struct` borrow keeps the view alive and can't escape the method |
 | `timeline/03-net5-function-pointers` | C# 9 / .NET 5 (Nov 2020) | Function pointers replace the callback delegate; `SuppressGCTransition` |
+| `timeline/04-net7-libraryimport` | C# 11 / .NET 7 (Nov 2022) | `LibraryImport` writes the marshalling at compile time; `DisableRuntimeMarshalling` |
 
 ## 00 — baseline, 2020
 
@@ -104,3 +105,43 @@ Six months after this project's last commit.
   take long and never call back into .NET — a GC can't proceed while one runs.
 - **`Encoding.GetString(in ReadOnlySequence<byte>)`** decodes across the chunks
   directly, without the intermediate `ToArray()`.
+
+## 04 — `LibraryImport` (C# 11 / .NET 7, November 2022)
+
+- **`[LibraryImport]` replaces `[DllImport]`.** `DllImport` has the runtime
+  generate a marshalling stub when the method is first called. `LibraryImport`
+  is a source generator: the stub is ordinary C# written at compile time, which
+  you can read, step into, and ship under NativeAOT and trimming. Here is what it
+  writes for `insert_text` — the `SafeHandle` reference counting that used to be
+  invisible:
+
+  ```csharp
+  private static partial int _insert_text(RustViewHandle view, byte* text, nuint len)
+  {
+      nint __view_native = default;
+      int __retVal = default;
+      SafeHandleMarshaller<RustViewHandle>.ManagedToUnmanagedIn __view_native__marshaller = new();
+      try
+      {
+          __view_native__marshaller.FromManaged(view);      // DangerousAddRef
+          __view_native = __view_native__marshaller.ToUnmanaged();
+          __retVal = __PInvoke(__view_native, text, len);
+      }
+      finally
+      {
+          __view_native__marshaller.Free();                 // DangerousRelease
+      }
+      return __retVal;
+
+      [DllImport("ffi_test", EntryPoint = "insert_text", ExactSpelling = true)]
+      static extern unsafe int __PInvoke(nint __view_native, byte* __text_native, nuint __len_native);
+  }
+  ```
+
+  To see it all, build with `-p:EmitCompilerGeneratedFiles=true`.
+- **`[assembly: DisableRuntimeMarshalling]`** switches off the runtime's
+  built-in marshaller for the whole assembly. Any signature that would have
+  needed it is now a compile error rather than a hidden stub. Here, nothing
+  changed: every signature was already blittable or handled by the generator.
+- **`"..."u8` literals** put UTF-8 constants straight into the binary as a
+  `ReadOnlySpan<byte>`, so the demo's fixed strings reach Rust without encoding.
