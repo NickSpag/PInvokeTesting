@@ -13,7 +13,8 @@ name = "ffi_test"
 path = "src/lib.rs"
 # cdylib, not dylib: dylib exports Rust's unstable ABI for other Rust crates,
 # cdylib is the C-ABI shared library a non-Rust caller links against.
-crate-type = ["cdylib"]
+# staticlib is the same C ABI as an archive, linked into a NativeAOT executable.
+crate-type = ["cdylib", "staticlib"]
 
 [[bin]]
 name = "ffi_test_bin"
