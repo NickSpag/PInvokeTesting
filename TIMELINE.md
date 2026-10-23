@@ -8,6 +8,7 @@ two neighbours is exactly one improvement. Every branch builds and passes
 |---|---|---|
 | `timeline/00-baseline-2020` | C# 8 / .NET Core 3.1 (2019) | The working fix, written with only what 2020 had |
 | `timeline/01-readonlysequence` | .NET Core 2.1 (2018) | Rust's text in chunks, read in place as a `ReadOnlySequence<byte>` |
+| `timeline/02-scoped-borrow` | C# 7.2 (2017), C# 8 (2019) | A `ref struct` borrow keeps the view alive and can't escape the method |
 
 ## 00 — baseline, 2020
 
@@ -52,3 +53,35 @@ memory, built for pipelines.
 
 What this does **not** fix: the sequence is valid only until the next edit or
 until the view is freed, and nothing stops C# holding it longer. That is next.
+
+## 02 — a scoped borrow (`ref struct`, C# 7.2 / C# 8)
+
+Also available in 2020. Step 01's sequence points into Rust's memory and
+nothing stopped C# keeping it after the view was freed. `TextBorrow` closes
+both halves of that:
+
+- **The view can't be freed under it.** Opening a borrow calls
+  `DangerousAddRef` on the `SafeHandle`; closing it calls `DangerousRelease`. A
+  `Dispose` of the view while a borrow is open only marks the handle closed, and
+  `free_view` runs when the last borrow ends. Using the view after that throws
+  `ObjectDisposedException` instead of reading freed memory.
+- **The borrow can't outlive its method.** It's a `ref struct` (C# 7.2), so the
+  compiler rejects storing it in a field, boxing it, capturing it in a lambda,
+  or using it in an `async` method. `using` on a ref struct came with C# 8.
+  Build with `-p:DefineConstants=DEMO_ESCAPE` to see the errors:
+
+  ```
+  error CS0029: Cannot implicitly convert type 'TextBorrow' to 'object'
+  error CS8175: Cannot use ref local 'borrow' inside an anonymous method, lambda expression, or query expression
+  error CS8400: Feature 'ref and unsafe in async and iterator methods' is not available in C# 8.0
+  error CS8345: Field or auto-implemented property cannot be of type 'TextBorrow' unless it is an instance member of a ref struct
+  ```
+- **Chunks come out as `ReadOnlySpan<byte>`** through a ref struct enumerator, so
+  they can't escape either. The public `ReadOnlySequence` from step 01 is gone:
+  it's an ordinary struct over heap objects, so it could be kept anywhere.
+- **A copied borrow releases once.** A ref struct can still be copied, so the
+  reference is held by a small heap object that releases on the first `Dispose`.
+
+What the compiler does *not* catch: inside one method, a span read from the
+borrow can still be used after the borrow's `Dispose`, and editing the view
+while a borrow is open invalidates it. Rust's borrow checker would reject both.

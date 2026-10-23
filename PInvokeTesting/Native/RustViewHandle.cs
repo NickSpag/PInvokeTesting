@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -36,14 +35,18 @@ namespace PInvokeTesting
                 throw new InvalidOperationException($"insert_text failed with status {status}");
         }
 
-        /// <summary>
-        /// Rust's chunks, read in place. Valid only until the next edit or until
-        /// the view is disposed: hold on to it longer and it reads freed memory.
-        /// </summary>
-        public ReadOnlySequence<byte> TextSequence => RustBindings.BorrowText(_rustView);
+        /// <summary>Reads Rust's chunks in place; dispose it before the next edit.</summary>
+        public TextBorrow BorrowText() => new TextBorrow(_rustView);
 
         /// <summary>Copies the text out, so nothing outlives Rust's buffer.</summary>
-        public string Text => Encoding.UTF8.GetString(TextSequence.ToArray());
+        public string Text
+        {
+            get
+            {
+                using (var text = BorrowText())
+                    return text.ToString();
+            }
+        }
 
         // Rust keeps the native thunk for as long as any view lives, so the
         // delegate behind it must never be collected: one static instance,

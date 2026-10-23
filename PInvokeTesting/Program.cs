@@ -37,10 +37,21 @@ namespace PInvokeTesting
                 // 28 bytes so far; "x" leaves 3 bytes of room in the 16-byte chunk, and
                 // the second "é" lands with one byte to spare, where it can't fit.
                 view.Insert("xéé");
-                var sequence = view.TextSequence;
-                Check(!sequence.IsSingleSegment, $"text is read in place from {CountSegments(sequence)} Rust chunks, not one buffer");
-                Check(sequence.Length == Encoding.UTF8.GetByteCount(view.Text), "sequence length matches the UTF-8 byte count");
-                Check(EveryChunkIsValidUtf8(sequence), "no character is split across two chunks");
+                using (var text = view.BorrowText())
+                {
+                    var chunks = 0;
+                    var everyChunkValid = true;
+                    var strict = new UTF8Encoding(false, throwOnInvalidBytes: true);
+                    foreach (var chunk in text)
+                    {
+                        chunks++;
+                        try { strict.GetCharCount(chunk); }
+                        catch (DecoderFallbackException) { everyChunkValid = false; }
+                    }
+                    Check(chunks > 1, $"text is read in place from {chunks} Rust chunks, not one buffer");
+                    Check(text.Length == Encoding.UTF8.GetByteCount(text.ToString()), "borrow length matches the UTF-8 byte count");
+                    Check(everyChunkValid, "no character is split across two chunks");
+                }
 
                 view.Insert("a\0b");
                 Check(view.Text.EndsWith("a\0b"), "embedded NUL survives (length-prefixed, not C string)");
@@ -64,6 +75,34 @@ namespace PInvokeTesting
             GC.WaitForPendingFinalizers();
             Check(RustBindings.LiveViews == 0, $"finalizer freed every undisposed view (live: {RustBindings.LiveViews})");
 
+            // A borrow outlives the view's Dispose: the free waits for it.
+            var borrowed = new RustView();
+            var borrow = borrowed.BorrowText();
+            var copy = borrow;
+            borrowed.Dispose();
+            Check(RustBindings.LiveViews == 1, "an open borrow keeps a disposed view alive");
+            Check(borrow.ToString() == "hey dotnet!", "and its text is still readable");
+            borrow.Dispose();
+            copy.Dispose();
+            Check(RustBindings.LiveViews == 0, "closing the borrow frees it, once, even when the borrow was copied");
+
+            try
+            {
+                _ = borrowed.Text;
+                Check(false, "using a disposed view throws");
+            }
+            catch (ObjectDisposedException)
+            {
+                Check(true, "using a disposed view throws ObjectDisposedException rather than reading freed memory");
+            }
+
+#if DEMO_ESCAPE
+            // Each line is a compile error: a borrow can't leave this method.
+            object boxed = borrowed.BorrowText();
+            Func<string> later = () => borrow.ToString();
+            System.Threading.Tasks.Task<string> async = ReadLaterAsync(borrowed);
+#endif
+
             // Whatever Rust holds to reach C# must survive a collection.
             using (var view = new RustView())
             {
@@ -78,28 +117,14 @@ namespace PInvokeTesting
             return failures == 0 ? 0 : 1;
         }
 
-        static int CountSegments(System.Buffers.ReadOnlySequence<byte> sequence)
+#if DEMO_ESCAPE
+        static async System.Threading.Tasks.Task<string> ReadLaterAsync(RustView view)
         {
-            var count = 0;
-            foreach (var _ in sequence)
-                count++;
-            return count;
+            var text = view.BorrowText();
+            await System.Threading.Tasks.Task.Yield();
+            return text.ToString();
         }
-
-        static bool EveryChunkIsValidUtf8(System.Buffers.ReadOnlySequence<byte> sequence)
-        {
-            var strict = new UTF8Encoding(false, throwOnInvalidBytes: true);
-            try
-            {
-                foreach (var chunk in sequence)
-                    strict.GetCharCount(chunk.Span);
-                return true;
-            }
-            catch (DecoderFallbackException)
-            {
-                return false;
-            }
-        }
+#endif
 
         // Separate method so no local keeps the views reachable during the GC.
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
