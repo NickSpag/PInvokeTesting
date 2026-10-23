@@ -1,3 +1,6 @@
+// Edition 2024 warns about this; C# 15 makes its counterpart an error, so match it.
+#![deny(unsafe_op_in_unsafe_fn)]
+
 mod view;
 
 use std::ffi::c_void;
@@ -17,29 +20,37 @@ fn guarded(body: impl FnOnce() -> i32) -> i32 {
     catch_unwind(AssertUnwindSafe(body)).unwrap_or(FFI_PANIC)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn create_view() -> *mut RustView {
     catch_unwind(|| Box::into_raw(Box::new(RustView::new()))).unwrap_or(std::ptr::null_mut())
 }
 
-/// Takes the view back from C#. Must be called exactly once per view.
-#[no_mangle]
+/// Takes the view back from C#.
+///
+/// # Safety
+/// `ptr` is null or came from `create_view`, and is freed exactly once.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_view(ptr: *mut RustView) {
     if ptr.is_null() {
         return
     }
-    let _ = catch_unwind(AssertUnwindSafe(|| drop(Box::from_raw(ptr))));
+    // SAFETY: the caller's contract; the SafeHandle calls this once per view.
+    let _ = catch_unwind(AssertUnwindSafe(|| drop(unsafe { Box::from_raw(ptr) })));
 }
 
 /// Takes a pointer and length rather than a NUL-terminated string, so the text
 /// may contain NULs and the caller never has to append one.
-#[no_mangle]
+///
+/// # Safety
+/// `ptr` is a live view, and `text` points at `len` readable bytes.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn insert_text(ptr: *mut RustView, text: *const u8, len: usize) -> i32 {
     guarded(|| {
         if ptr.is_null() || (text.is_null() && len != 0) {
             return FFI_NULL_ARGUMENT;
         }
-        let bytes = if len == 0 { &[][..] } else { std::slice::from_raw_parts(text, len) };
+        // SAFETY: the caller's contract; C# pins a span and passes its length.
+        let bytes = if len == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(text, len) } };
         let text_str = match std::str::from_utf8(bytes) {
             Ok(text_str) => text_str,
             Err(_) => return FFI_INVALID_UTF8,
@@ -47,7 +58,8 @@ pub unsafe extern "C" fn insert_text(ptr: *mut RustView, text: *const u8, len: u
         // The &mut has to end before the callback runs: C# reads the view back
         // from inside it, and a shared borrow alongside a live &mut is UB.
         let on_update = {
-            let view = &mut *ptr;
+            // SAFETY: a live view, and nothing else borrows it during an edit.
+            let view = unsafe { &mut *ptr };
             view.insert(text_str);
             view.on_update()
         };
@@ -59,24 +71,34 @@ pub unsafe extern "C" fn insert_text(ptr: *mut RustView, text: *const u8, len: u
 }
 
 /// How many chunks the view's text is split into.
-#[no_mangle]
+///
+/// # Safety
+/// `ptr` is null or a live view.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn view_chunk_count(ptr: *const RustView) -> usize {
     if ptr.is_null() {
         return 0;
     }
-    (*ptr).chunks().len()
+    // SAFETY: the caller's contract.
+    unsafe { (*ptr).chunks().len() }
 }
 
-/// Lends one chunk's UTF-8 bytes. Valid only until the next call that mutates
-/// or frees the view.
-#[no_mangle]
+/// Lends one chunk's UTF-8 bytes.
+///
+/// # Safety
+/// `ptr` is null or a live view, and `out_len` is null or writable. The returned
+/// bytes are valid only until the next call that mutates or frees the view.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn view_chunk(ptr: *const RustView, index: usize, out_len: *mut usize) -> *const u8 {
     if ptr.is_null() || out_len.is_null() {
         return std::ptr::null();
     }
-    match (*ptr).chunks().get(index) {
+    // SAFETY: the caller's contract.
+    let view = unsafe { &*ptr };
+    match view.chunks().get(index) {
         Some(chunk) => {
-            *out_len = chunk.len();
+            // SAFETY: the caller's contract.
+            unsafe { *out_len = chunk.len() };
             chunk.as_ptr()
         }
         None => std::ptr::null(),
@@ -84,7 +106,11 @@ pub unsafe extern "C" fn view_chunk(ptr: *const RustView, index: usize, out_len:
 }
 
 /// Registers a callback run after every edit, or clears it when `callback` is null.
-#[no_mangle]
+///
+/// # Safety
+/// `ptr` is null or a live view, and `callback` accepts `user_data` for as long
+/// as the view lives.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn set_update_callback(
     ptr: *mut RustView,
     callback: Option<UpdateCallback>,
@@ -93,11 +119,12 @@ pub unsafe extern "C" fn set_update_callback(
     if ptr.is_null() {
         return FFI_NULL_ARGUMENT;
     }
-    (*ptr).set_on_update(callback.map(|cb| (cb, user_data)));
+    // SAFETY: the caller's contract.
+    unsafe { (*ptr).set_on_update(callback.map(|cb| (cb, user_data))) };
     FFI_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn live_views() -> usize {
     LIVE_VIEWS.load(Ordering::SeqCst)
 }

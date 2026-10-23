@@ -5,7 +5,7 @@ using System.Text;
 
 namespace PInvokeTesting
 {
-    public unsafe class RustView : IDisposable
+    public class RustView : IDisposable
     {
         readonly RustViewHandle _rustView;
 
@@ -22,7 +22,10 @@ namespace PInvokeTesting
             // Weak, so the registration alone doesn't keep the view alive.
             // The SafeHandle owns it, so it's freed with the view even when nobody disposes.
             _rustView.Owner = GCHandle.Alloc(this, GCHandleType.Weak);
-            RustBindings.SetUpdateCallback(_rustView, &OnUpdate, GCHandle.ToIntPtr(_rustView.Owner));
+            // Sound: OnUpdate has exactly the signature Rust calls, and Owner stays
+            // allocated until ReleaseHandle, which frees the view (and with it the
+            // only copy of this pointer) first.
+            unsafe { RustBindings.SetUpdateCallback(_rustView, &OnUpdate, GCHandle.ToIntPtr(_rustView.Owner)); }
         }
 
         public void Insert(string text) => Insert(Encoding.UTF8.GetBytes(text));
@@ -57,7 +60,9 @@ namespace PInvokeTesting
             // An exception may not cross back into Rust either.
             try
             {
-                if (GCHandle.FromIntPtr(userData).Target is RustView view)
+                // Sound: the only userData Rust ever has is the Owner handle above,
+                // and Rust can't call back once the view is freed.
+                if (unsafe(GCHandle.FromIntPtr(userData)).Target is RustView view)
                     view.Updated?.Invoke(view.Text);
             }
             catch (Exception ex)
@@ -86,9 +91,13 @@ namespace PInvokeTesting
         protected override bool ReleaseHandle()
         {
             // Free the view first: after this Rust can no longer call back with Owner.
-            RustBindings.FreeView(handle);
-            if (Owner.IsAllocated)
-                Owner.Free();
+            // Sound: the SafeHandle runs this exactly once, for a pointer Rust made.
+            unsafe
+            {
+                RustBindings.FreeView(handle);
+                if (Owner.IsAllocated)
+                    Owner.Free();
+            }
             return true;
         }
     }

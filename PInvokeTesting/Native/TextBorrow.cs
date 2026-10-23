@@ -23,7 +23,9 @@ namespace PInvokeTesting
         internal TextBorrow(RustViewHandle handle)
         {
             _lease = new Lease(handle);
-            _text = RustBindings.BorrowText(handle);
+            // Sound: the lease keeps the view from being freed until Dispose. That
+            // an edit also invalidates the text is documented, not enforced.
+            _text = unsafe(RustBindings.BorrowText(handle));
         }
 
         public long Length => _text.Length;
