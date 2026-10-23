@@ -1,7 +1,7 @@
 // Edition 2024 warns about this; C# 15 makes its counterpart an error, so match it.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-mod view;
+pub mod view;
 
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -55,19 +55,57 @@ pub unsafe extern "C" fn insert_text(ptr: *mut RustView, text: *const u8, len: u
             Ok(text_str) => text_str,
             Err(_) => return FFI_INVALID_UTF8,
         };
-        // The &mut has to end before the callback runs: C# reads the view back
-        // from inside it, and a shared borrow alongside a live &mut is UB.
-        let on_update = {
-            // SAFETY: a live view, and nothing else borrows it during an edit.
-            let view = unsafe { &mut *ptr };
-            view.insert(text_str);
-            view.on_update()
-        };
-        if let Some((callback, user_data)) = on_update {
-            callback(user_data);
-        }
+        // SAFETY: the caller's contract.
+        unsafe { edit(ptr, |view| view.insert(text_str)) };
         FFI_OK
     })
+}
+
+/// Removes the last character.
+///
+/// # Safety
+/// `ptr` is null or a live view.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn delete_backward(ptr: *mut RustView) -> i32 {
+    guarded(|| {
+        if ptr.is_null() {
+            return FFI_NULL_ARGUMENT;
+        }
+        // SAFETY: the caller's contract.
+        unsafe { edit(ptr, RustView::delete_backward) };
+        FFI_OK
+    })
+}
+
+/// Applies `change`, then runs the update callback.
+///
+/// # Safety
+/// `ptr` is a live view.
+unsafe fn edit(ptr: *mut RustView, change: impl FnOnce(&mut RustView)) {
+    // The &mut has to end before the callback runs: C# reads the view back
+    // from inside it, and a shared borrow alongside a live &mut is UB.
+    let on_update = {
+        // SAFETY: a live view, and nothing else borrows it during an edit.
+        let view = unsafe { &mut *ptr };
+        change(view);
+        view.on_update()
+    };
+    if let Some((callback, user_data)) = on_update {
+        callback(user_data);
+    }
+}
+
+/// The text's length in bytes.
+///
+/// # Safety
+/// `ptr` is null or a live view.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn view_len(ptr: *const RustView) -> usize {
+    if ptr.is_null() {
+        return 0;
+    }
+    // SAFETY: the caller's contract.
+    unsafe { (*ptr).len() }
 }
 
 /// How many chunks the view's text is split into.

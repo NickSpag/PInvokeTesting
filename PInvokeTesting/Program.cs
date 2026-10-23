@@ -1,6 +1,8 @@
 using System;
 using System.Text;
+#if BENCHMARKS
 using BenchmarkDotNet.Running;
+#endif
 using PInvokeTesting.Benchmarks;
 
 namespace PInvokeTesting
@@ -11,9 +13,13 @@ namespace PInvokeTesting
         {
             if (args.Length > 0 && args[0] == "bench")
             {
-                BenchmarkRunner.Run<JsonViaStdInOutBenchmark>();
-                BenchmarkRunner.Run<RustLibraryBenchmark>();
+#if BENCHMARKS
+                BenchmarkRunner.Run<InsertBenchmarks>();
                 return 0;
+#else
+                Console.Error.WriteLine("Benchmarks need the JIT: run `dotnet run -c Release -- bench` instead.");
+                return 2;
+#endif
             }
 
             var failures = 0;
@@ -67,6 +73,21 @@ namespace PInvokeTesting
                 }
             }
             Check(RustBindings.LiveViews == 0, $"Dispose freed the view (live: {RustBindings.LiveViews})");
+
+            using (var view = new RustView())
+            {
+                view.Insert("é"u8);
+                view.DeleteBackward();
+                Check(view.Text == "hey dotnet!" && view.Length == 11, "backspace removes a whole two-byte character");
+            }
+
+            // The same edits over the pipe, as the benchmark makes them.
+            using (var rpc = new PInvokeTesting.Benchmarks.RpcClient())
+            {
+                var afterInsert = rpc.Insert();
+                var afterBackspace = rpc.DeleteBackward();
+                Check(afterInsert == 12 && afterBackspace == 11, $"JSON round trips through ffi_test_bin (lengths {afterInsert}, {afterBackspace})");
+            }
 
             // Never disposed: the SafeHandle's finalizer has to free them.
             LeakViews(1000);

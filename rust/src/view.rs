@@ -14,19 +14,29 @@ pub const CHUNK_CAPACITY: usize = 16;
 /// contiguous buffer to lend out.
 pub struct RustView {
     chunks: Vec<String>,
+    len: usize,
     on_update: Option<(UpdateCallback, *mut std::ffi::c_void)>,
 }
 
 impl RustView {
     pub fn new() -> RustView {
         LIVE_VIEWS.fetch_add(1, Ordering::SeqCst);
-        let mut view = RustView { chunks: Vec::new(), on_update: None };
+        let mut view = RustView { chunks: Vec::new(), len: 0, on_update: None };
         view.insert("hey dotnet!");
         view
     }
 
     pub fn chunks(&self) -> &[String] {
         &self.chunks
+    }
+
+    /// Total length of the text in bytes.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     pub fn on_update(&self) -> Option<(UpdateCallback, *mut std::ffi::c_void)> {
@@ -40,6 +50,7 @@ impl RustView {
     /// Appends, filling the last chunk before starting a new one and never
     /// splitting a UTF-8 character across two chunks.
     pub fn insert(&mut self, new_text: &str){
+        self.len += new_text.len();
         let mut rest = new_text;
         while !rest.is_empty() {
             let room = match self.chunks.last() {
@@ -57,6 +68,33 @@ impl RustView {
             self.chunks.last_mut().unwrap().push_str(&rest[..split]);
             rest = &rest[split..];
         }
+    }
+}
+
+impl RustView {
+    /// Removes the last character, the whole character, like a backspace at the
+    /// end of the text. Drops the chunk it leaves empty.
+    pub fn delete_backward(&mut self) {
+        while let Some(last) = self.chunks.last_mut() {
+            match last.pop() {
+                Some(removed) => {
+                    self.len -= removed.len_utf8();
+                    if last.is_empty() {
+                        self.chunks.pop();
+                    }
+                    return;
+                }
+                None => {
+                    self.chunks.pop();
+                }
+            }
+        }
+    }
+}
+
+impl Default for RustView {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

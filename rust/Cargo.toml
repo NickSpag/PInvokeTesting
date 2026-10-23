@@ -7,6 +7,9 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+# Only the stdin/stdout binary uses these, as xi-core does for its JSON-RPC.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [lib]
 name = "ffi_test"
@@ -14,7 +17,8 @@ path = "src/lib.rs"
 # cdylib, not dylib: dylib exports Rust's unstable ABI for other Rust crates,
 # cdylib is the C-ABI shared library a non-Rust caller links against.
 # staticlib is the same C ABI as an archive, linked into a NativeAOT executable.
-crate-type = ["cdylib", "staticlib"]
+# rlib lets the stdin/stdout binary share the same RustView.
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [[bin]]
 name = "ffi_test_bin"

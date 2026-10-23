@@ -45,6 +45,18 @@ namespace PInvokeTesting
         [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
         private static unsafe partial int _insert_text(RustViewHandle view, byte* text, nuint len);
 
+        // safe: no arguments that can lie; the SafeHandle keeps the view alive.
+        [LibraryImport(NativeLibrary, EntryPoint = "delete_backward")]
+        [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static safe partial int _delete_backward(RustViewHandle view);
+
+        // safe: reads a field; the SafeHandle keeps the view alive for the call.
+        // A few instructions that never block or call back: skip the GC transition.
+        [SuppressGCTransition]
+        [LibraryImport(NativeLibrary, EntryPoint = "view_len")]
+        [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+        private static safe partial nuint _view_len(RustViewHandle view);
+
         // safe: reads a length; the SafeHandle keeps the view alive for the call.
         // A few instructions that never block or call back: skip the GC transition.
         [SuppressGCTransition]
@@ -115,6 +127,10 @@ namespace PInvokeTesting
         {
             unsafe { _free_view(viewHandle); }
         }
+
+        public static int DeleteBackward(RustViewHandle view) => _delete_backward(view);
+
+        public static long Length(RustViewHandle view) => checked((long)_view_len(view));
 
         public static RustViewHandle CreateView() => _create_view();
 

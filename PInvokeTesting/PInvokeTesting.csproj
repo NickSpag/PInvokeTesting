@@ -12,18 +12,28 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
-  </ItemGroup>
-  <ItemGroup>
     <Folder Include="Benchmarks\" />
     <Folder Include="Native\" />
   </ItemGroup>
   <!-- `dotnet publish -r osx-arm64` compiles ahead of time and links the Rust
        archive into the executable: calls to ffi_test become direct calls, and
        there is no dylib to ship or find. `dotnet run` still uses the dylib. -->
-  <PropertyGroup>
+  <!-- Only when publishing for a runtime: PublishAot also writes NativeAOT's
+       feature switches (no dynamic code, no reflection-based JSON) into every
+       build's runtimeconfig, which would make `dotnet run` act as if it were AOT. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
     <PublishAot>true</PublishAot>
   </PropertyGroup>
+  <!-- BenchmarkDotNet needs the JIT, so it stays out of the NativeAOT build. -->
+  <PropertyGroup Condition="'$(PublishAot)' != 'true'">
+    <DefineConstants>$(DefineConstants);BENCHMARKS</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(PublishAot)' != 'true'">
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(PublishAot)' == 'true'">
+    <Compile Remove="Benchmarks/InsertBenchmarks.cs" />
+  </ItemGroup>
   <ItemGroup>
     <DirectPInvoke Include="ffi_test" />
     <NativeLibrary Include="../rust/target/release/libffi_test.a" />
@@ -31,5 +41,6 @@
   <!-- Run cargo build in release mode in ../rust first. -->
   <ItemGroup>
     <None Include="../rust/target/release/libffi_test.dylib" Link="libffi_test.dylib" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../rust/target/release/ffi_test_bin" Link="ffi_test_bin" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
