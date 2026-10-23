@@ -9,20 +9,22 @@ namespace PInvokeTesting
     /// Dispose and Unpin are no-ops because Rust frees the bytes, and the GC
     /// never moves them, so there is nothing to pin.
     /// </summary>
-    sealed unsafe class UnmanagedChunk : MemoryManager<byte>
+    sealed class UnmanagedChunk : MemoryManager<byte>
     {
         readonly byte* _pointer;
         readonly int _length;
 
-        public UnmanagedChunk(byte* pointer, int length)
+        /// <summary>The caller guarantees `length` bytes at `pointer` outlive every use of this.</summary>
+        public unsafe UnmanagedChunk(byte* pointer, int length)
         {
             _pointer = pointer;
             _length = length;
         }
 
-        public override Span<byte> GetSpan() => new Span<byte>(_pointer, _length);
+        // Sound for as long as the constructor's promise holds.
+        public override Span<byte> GetSpan() => unsafe(new Span<byte>(_pointer, _length));
 
-        public override MemoryHandle Pin(int elementIndex = 0) => new MemoryHandle(_pointer + elementIndex);
+        public override MemoryHandle Pin(int elementIndex = 0) => unsafe(new MemoryHandle(_pointer + elementIndex));
 
         public override void Unpin() { }
 

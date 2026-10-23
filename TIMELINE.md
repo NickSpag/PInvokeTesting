@@ -12,6 +12,7 @@ two neighbours is exactly one improvement. Every branch builds and passes
 | `timeline/03-net5-function-pointers` | C# 9 / .NET 5 (Nov 2020) | Function pointers replace the callback delegate; `SuppressGCTransition` |
 | `timeline/04-net7-libraryimport` | C# 11 / .NET 7 (Nov 2022) | `LibraryImport` writes the marshalling at compile time; `DisableRuntimeMarshalling` |
 | `timeline/05-nativeaot-static-link` | .NET 7 (Nov 2022) | NativeAOT links the Rust archive into the executable |
+| `timeline/06-net11-memory-safety` | C# 15 / .NET 11 (preview, 2026); Rust 2024 | Every operation on unmanaged memory is an explicit, commented `unsafe` region, on both sides |
 
 ## 00 — baseline, 2020
 
@@ -175,3 +176,70 @@ built for macOS 26 while .NET links for macOS 12 and up; the binary runs here,
 and a `rustup` toolchain (whose standard library targets older releases) would
 silence it. And the executable is about 40 MB because it carries
 BenchmarkDotNet; the interop itself adds very little.
+
+## 06 — the updated memory safety rules (C# 15 / .NET 11 preview) and Rust 2024
+
+**Needs the .NET 11 SDK** (built against `11.0.100-rc.2`, pinned in
+`global.json`). Both the language feature and the SDK are previews, and
+Microsoft says the details may change.
+
+The project opts in with:
+
+```xml
+<LangVersion>preview</LangVersion>
+<Features>$(Features);updated-memory-safety-rules</Features>
+```
+
+That changes what `unsafe` means. It used to mark code that *mentions*
+pointers, with no effect on callers. Now it marks the operations that *touch*
+unmanaged memory, and on a member it's a contract: callers must be in an
+`unsafe` context, so the obligation to audit moves to them. Flipping the switch
+with no other change gave five errors:
+
+```
+NativeBinding.cs(17,40): error CS9377: The 'unsafe' modifier does not have any effect here under the current memory safety rules.
+NativeBinding.cs(33,37): error CS9389: 'extern' member must be marked 'unsafe' or 'safe'.
+NativeBinding.cs(59,38): error CS9389: 'extern' member must be marked 'unsafe' or 'safe'.
+NativeChunks.cs(12,25):  error CS9377: (same, on UnmanagedChunk)
+RustViewHandle.cs(8,25): error CS9377: (same, on RustView)
+```
+
+- **`unsafe` on a class is now an error**: a type has no callers to hand an
+  obligation to.
+- **Every binding says `safe` or `unsafe`.** The compiler demanded it for only
+  two of the seven, `free_view` and `live_views`, because those are the ones the
+  `LibraryImport` generator emits as a plain `extern`; the other five go through
+  a generated wrapper. They're all marked anyway, with the reason beside each:
+  `free_view`, `insert_text`, `view_chunk` and `set_update_callback` are
+  `unsafe`, while `create_view`, `view_chunk_count` and `live_views` are `safe`.
+- **`unsafe` on a method no longer makes its body unsafe.** Marking a method
+  and entering an unsafe region are separate now, so even `FreeView` has an
+  `unsafe { }` block inside its `unsafe` signature.
+- **The .NET 11 libraries carry the markers too.** `new Span<byte>(void*, int)`,
+  `new MemoryHandle(void*)`, `GCHandle.FromIntPtr` and `GCHandle.Free` are all
+  requires-unsafe, so the compiler found every place that needed a reason to be
+  sound — eleven of them, each now an `unsafe { }` block or the new single
+  expression form, `unsafe(expr)`, with a comment saying why it's sound.
+- **What's left safe is the API.** `RustView`, `TextBorrow` and
+  `RustBindings.InsertUtf8` call no unsafe member from the outside, and
+  `Program.cs` contains no `unsafe` at all. `fixed` no longer needs an unsafe
+  context either: pinning is safe, dereferencing isn't.
+- The assembly is stamped with `MemorySafetyRulesAttribute`, and members marked
+  `unsafe` carry `RequiresUnsafeAttribute`, so other assemblies built under the
+  new rules see the obligation too.
+
+**Rust's edition 2024 made the same two changes**, and the crate moves to it
+here. `#[no_mangle]` is now `#[unsafe(no_mangle)]` (an unmangled export can clash
+with another symbol of the same name, so writing one is an assertion), and the
+body of an `unsafe fn` is no longer an unsafe block. The second is a warning in
+Rust (`unsafe_op_in_unsafe_fn`); the crate denies it to match C#. Each operation
+now sits in its own `unsafe { }` with a `// SAFETY:` comment, and each export has
+a `# Safety` section saying what its caller must guarantee.
+
+So both sides of the boundary now say, at each operation, what makes it sound —
+and those comments describe the same contract from opposite ends.
+
+Step 02's escape demo reads differently under the newer compiler: C# 13 allows
+a ref struct in an `async` method as long as it isn't held across an `await`,
+so that error is now `CS4007: Instance of type 'TextBorrow' cannot be preserved
+across 'await' or 'yield' boundary`.
