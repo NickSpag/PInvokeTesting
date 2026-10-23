@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -21,7 +22,7 @@ namespace PInvokeTesting
             // Weak, so the registration alone doesn't keep the view alive.
             // The SafeHandle owns it, so it's freed with the view even when nobody disposes.
             _rustView.Owner = GCHandle.Alloc(this, GCHandleType.Weak);
-            RustBindings.SetUpdateCallback(_rustView, s_onUpdate, GCHandle.ToIntPtr(_rustView.Owner));
+            RustBindings.SetUpdateCallback(_rustView, &OnUpdate, GCHandle.ToIntPtr(_rustView.Owner));
         }
 
         public void Insert(string text) => Insert(Encoding.UTF8.GetBytes(text));
@@ -48,12 +49,9 @@ namespace PInvokeTesting
             }
         }
 
-        // Rust keeps the native thunk for as long as any view lives, so the
-        // delegate behind it must never be collected: one static instance,
-        // shared by every view. A delegate created per call and dropped is the
-        // classic crash here, because nothing on the managed side references it.
-        static readonly RustBindings.UpdateCallback s_onUpdate = OnUpdate;
-
+        // A real native entry point, no delegate behind it, so there's nothing to
+        // keep alive. Rust can hold the address for as long as it likes.
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
         static void OnUpdate(IntPtr userData)
         {
             // An exception may not cross back into Rust either.

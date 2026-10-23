@@ -30,7 +30,8 @@ namespace PInvokeTesting
 
         public void CopyTo(Span<byte> destination) => _text.CopyTo(destination);
 
-        public override string ToString() => Encoding.UTF8.GetString(_text.ToArray());
+        // .NET 5 decodes across the segments directly, with no intermediate array.
+        public override string ToString() => Encoding.UTF8.GetString(_text);
 
         /// <summary>Each Rust chunk as a span, which can't escape either.</summary>
         public ChunkEnumerator GetEnumerator() => new ChunkEnumerator(_text);

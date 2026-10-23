@@ -18,14 +18,6 @@ namespace PInvokeTesting
         public const int InvalidUtf8 = 2;
         public const int Panic = 3;
 
-        /// <summary>
-        /// Rust calls this after every edit. In C# 8 the only way to hand managed
-        /// code to native code is a delegate: the marshaller makes a native thunk
-        /// for it, which stays valid only while the delegate object is alive.
-        /// </summary>
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        public delegate void UpdateCallback(IntPtr userData);
-
         [DllImport(NativeLibrary, EntryPoint = "create_view", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
         private static extern RustViewHandle _create_view();
 
@@ -33,26 +25,32 @@ namespace PInvokeTesting
         private static extern void _free_view(IntPtr view);
 
         [DllImport(NativeLibrary, EntryPoint = "insert_text", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int _insert_text(RustViewHandle view, byte* text, UIntPtr len);
+        private static extern int _insert_text(RustViewHandle view, byte* text, nuint len);
 
+        // A few instructions that never block or call back: skip the GC transition.
+        [SuppressGCTransition]
         [DllImport(NativeLibrary, EntryPoint = "view_chunk_count", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern UIntPtr _view_chunk_count(RustViewHandle view);
+        private static extern nuint _view_chunk_count(RustViewHandle view);
 
+        // A few instructions that never block or call back: skip the GC transition.
+        [SuppressGCTransition]
         [DllImport(NativeLibrary, EntryPoint = "view_chunk", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern byte* _view_chunk(RustViewHandle view, UIntPtr index, out UIntPtr len);
+        private static extern byte* _view_chunk(RustViewHandle view, nuint index, out nuint len);
 
         [DllImport(NativeLibrary, EntryPoint = "set_update_callback", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int _set_update_callback(RustViewHandle view, UpdateCallback callback, IntPtr userData);
+        private static extern int _set_update_callback(RustViewHandle view, delegate* unmanaged[Cdecl]<IntPtr, void> callback, IntPtr userData);
 
+        // A few instructions that never block or call back: skip the GC transition.
+        [SuppressGCTransition]
         [DllImport(NativeLibrary, EntryPoint = "live_views", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern UIntPtr _live_views();
+        private static extern nuint _live_views();
 
 
         public static int InsertUtf8(RustViewHandle view, ReadOnlySpan<byte> utf8)
         {
             fixed (byte* text = utf8)
             {
-                return _insert_text(view, text, (UIntPtr)utf8.Length);
+                return _insert_text(view, text, (nuint)utf8.Length);
             }
         }
 
@@ -66,7 +64,7 @@ namespace PInvokeTesting
             ChunkSegment first = null, last = null;
             for (var i = 0; i < count; i++)
             {
-                var chunk = _view_chunk(view, (UIntPtr)i, out var len);
+                var chunk = _view_chunk(view, (nuint)i, out var len);
                 if (chunk == null)
                     break;
                 var memory = new UnmanagedChunk(chunk, checked((int)len)).Memory;
@@ -77,7 +75,7 @@ namespace PInvokeTesting
                 : new ReadOnlySequence<byte>(first, 0, last, last.Memory.Length);
         }
 
-        public static int SetUpdateCallback(RustViewHandle view, UpdateCallback callback, IntPtr userData)
+        public static int SetUpdateCallback(RustViewHandle view, delegate* unmanaged[Cdecl]<IntPtr, void> callback, IntPtr userData)
             => _set_update_callback(view, callback, userData);
 
         public static void FreeView(IntPtr viewHandle)
