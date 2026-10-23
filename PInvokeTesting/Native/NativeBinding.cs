@@ -17,6 +17,14 @@ namespace PInvokeTesting
         public const int InvalidUtf8 = 2;
         public const int Panic = 3;
 
+        /// <summary>
+        /// Rust calls this after every edit. In C# 8 the only way to hand managed
+        /// code to native code is a delegate: the marshaller makes a native thunk
+        /// for it, which stays valid only while the delegate object is alive.
+        /// </summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate void UpdateCallback(IntPtr userData, byte* text, UIntPtr len);
+
         [DllImport(NativeLibrary, EntryPoint = "create_view", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
         private static extern RustViewHandle _create_view();
 
@@ -24,23 +32,23 @@ namespace PInvokeTesting
         private static extern void _free_view(IntPtr view);
 
         [DllImport(NativeLibrary, EntryPoint = "insert_text", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int _insert_text(RustViewHandle view, byte* text, nuint len);
+        private static extern int _insert_text(RustViewHandle view, byte* text, UIntPtr len);
 
         [DllImport(NativeLibrary, EntryPoint = "view_text", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern byte* _view_text(RustViewHandle view, out nuint len);
+        private static extern byte* _view_text(RustViewHandle view, out UIntPtr len);
 
         [DllImport(NativeLibrary, EntryPoint = "set_update_callback", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern int _set_update_callback(RustViewHandle view, delegate* unmanaged[Cdecl]<IntPtr, byte*, nuint, void> callback, IntPtr userData);
+        private static extern int _set_update_callback(RustViewHandle view, UpdateCallback callback, IntPtr userData);
 
         [DllImport(NativeLibrary, EntryPoint = "live_views", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern nuint _live_views();
+        private static extern UIntPtr _live_views();
 
 
         public static int InsertUtf8(RustViewHandle view, ReadOnlySpan<byte> utf8)
         {
             fixed (byte* text = utf8)
             {
-                return _insert_text(view, text, (nuint)utf8.Length);
+                return _insert_text(view, text, (UIntPtr)utf8.Length);
             }
         }
 
@@ -50,7 +58,7 @@ namespace PInvokeTesting
             return text == null ? default : new ReadOnlySpan<byte>(text, checked((int)len));
         }
 
-        public static int SetUpdateCallback(RustViewHandle view, delegate* unmanaged[Cdecl]<IntPtr, byte*, nuint, void> callback, IntPtr userData)
+        public static int SetUpdateCallback(RustViewHandle view, UpdateCallback callback, IntPtr userData)
             => _set_update_callback(view, callback, userData);
 
         public static void FreeView(IntPtr viewHandle)

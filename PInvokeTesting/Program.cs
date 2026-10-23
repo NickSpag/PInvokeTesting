@@ -56,6 +56,17 @@ namespace PInvokeTesting
             GC.WaitForPendingFinalizers();
             Check(RustBindings.LiveViews == 0, $"finalizer freed every undisposed view (live: {RustBindings.LiveViews})");
 
+            // Whatever Rust holds to reach C# must survive a collection.
+            using (var view = new RustView())
+            {
+                string afterGc = null;
+                view.Updated += text => afterGc = text;
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                view.Insert("!");
+                Check(afterGc == "hey dotnet!!", "callback still fires after a full GC");
+            }
+
             return failures == 0 ? 0 : 1;
         }
 
