@@ -16,6 +16,16 @@
     <Folder Include="Benchmarks\" />
     <Folder Include="Native\" />
   </ItemGroup>
+  <!-- `dotnet publish -r osx-arm64` compiles ahead of time and links the Rust
+       archive into the executable: calls to ffi_test become direct calls, and
+       there is no dylib to ship or find. `dotnet run` still uses the dylib. -->
+  <PropertyGroup>
+    <PublishAot>true</PublishAot>
+  </PropertyGroup>
+  <ItemGroup>
+    <DirectPInvoke Include="ffi_test" />
+    <NativeLibrary Include="../rust/target/release/libffi_test.a" />
+  </ItemGroup>
   <!-- Run cargo build in release mode in ../rust first. -->
   <ItemGroup>
     <None Include="../rust/target/release/libffi_test.dylib" Link="libffi_test.dylib" CopyToOutputDirectory="PreserveNewest" />

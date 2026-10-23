@@ -11,6 +11,7 @@ two neighbours is exactly one improvement. Every branch builds and passes
 | `timeline/02-scoped-borrow` | C# 7.2 (2017), C# 8 (2019) | A `ref struct` borrow keeps the view alive and can't escape the method |
 | `timeline/03-net5-function-pointers` | C# 9 / .NET 5 (Nov 2020) | Function pointers replace the callback delegate; `SuppressGCTransition` |
 | `timeline/04-net7-libraryimport` | C# 11 / .NET 7 (Nov 2022) | `LibraryImport` writes the marshalling at compile time; `DisableRuntimeMarshalling` |
+| `timeline/05-nativeaot-static-link` | .NET 7 (Nov 2022) | NativeAOT links the Rust archive into the executable |
 
 ## 00 — baseline, 2020
 
@@ -145,3 +146,32 @@ Six months after this project's last commit.
   changed: every signature was already blittable or handled by the generator.
 - **`"..."u8` literals** put UTF-8 constants straight into the binary as a
   `ReadOnlySpan<byte>`, so the demo's fixed strings reach Rust without encoding.
+
+## 05 — NativeAOT with the Rust library linked in (.NET 7, November 2022)
+
+NativeAOT compiles the whole program to machine code at publish time, and it
+can link a static library into the result. The Rust crate now also builds a
+`staticlib` (`libffi_test.a`, the same C ABI as an archive), and the project
+lists it as a `NativeLibrary` with `DirectPInvoke` for `ffi_test`:
+
+```
+cargo build --release                          # in rust/
+dotnet publish -c Release -r osx-arm64 -o out  # in PInvokeTesting/
+rm out/libffi_test.dylib && out/PInvokeTesting # still passes
+```
+
+- **No library to find.** Without `DirectPInvoke`, a P/Invoke resolves its
+  library and symbol at runtime (`dlopen`/`dlsym`) on first call. With it, each
+  call is a direct call the linker resolved, into code inside the executable:
+  `insert_text`, `create_view` and `view_chunk` appear in its debug symbols, and
+  nothing in it refers to `libffi_test` any more.
+- **This is where step 04 pays off.** NativeAOT can't generate marshalling stubs
+  at runtime, so the compile-time stubs `LibraryImport` writes are what make
+  these calls possible at all.
+- `dotnet run` is unchanged: the JIT build still loads the dylib.
+
+Two things to know. The linker warns that Homebrew's Rust standard library was
+built for macOS 26 while .NET links for macOS 12 and up; the binary runs here,
+and a `rustup` toolchain (whose standard library targets older releases) would
+silence it. And the executable is about 40 MB because it carries
+BenchmarkDotNet; the interop itself adds very little.
