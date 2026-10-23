@@ -39,6 +39,17 @@ namespace PInvokeTesting
                 throw new InvalidOperationException($"insert_text failed with status {status}");
         }
 
+        /// <summary>Removes the last character, like a backspace at the end of the text.</summary>
+        public void DeleteBackward()
+        {
+            var status = RustBindings.DeleteBackward(_rustView);
+            if (status != RustBindings.Ok)
+                throw new InvalidOperationException($"delete_backward failed with status {status}");
+        }
+
+        /// <summary>The text's length in UTF-8 bytes.</summary>
+        public long Length => RustBindings.Length(_rustView);
+
         /// <summary>Reads Rust's chunks in place; dispose it before the next edit.</summary>
         public TextBorrow BorrowText() => new TextBorrow(_rustView);
 

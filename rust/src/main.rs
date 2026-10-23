@@ -1,47 +1,48 @@
+//! The out-of-process alternative to the library: one JSON request per line on
+//! stdin, one JSON reply per line on stdout, the way xi-core talks to its
+//! frontends. It edits the same RustView the library does.
 
-use std::io;
-use std::process;
+use std::io::{self, BufRead, BufWriter, Write};
 
-mod view;
-use view::RustView;
+use ffi_test::view::RustView;
+use serde::{Deserialize, Serialize};
 
-pub enum ReadError {
-    /// An error occurred in the underlying stream
-    Io(io::Error),
-    Disconnect,
+#[derive(Deserialize)]
+#[serde(tag = "method", content = "params", rename_all = "snake_case")]
+enum Request {
+    Insert { chars: String },
+    DeleteBackward,
 }
 
-// /// A trait for types which can handle RPCs.
-// ///
-// /// Types which implement `MethodHandler` are also responsible for implementing
-// /// `Parser`; `Parser` is provided when Self::Notification and Self::Request
-// /// can be used with serde::DeserializeOwned.
-// pub trait Handler {
-//     type Notification: DeserializeOwned;
-//     type Request: DeserializeOwned;
-//     fn handle_notification(&mut self, ctx: &RpcCtx, rpc: Self::Notification);
-//     fn handle_request(&mut self, ctx: &RpcCtx, rpc: Self::Request) -> Result<Value, RemoteError>;
-//     #[allow(unused_variables)]
-//     fn idle(&mut self, ctx: &RpcCtx, token: usize) {}
-// }
+#[derive(Serialize)]
+#[serde(tag = "method", content = "params", rename_all = "snake_case")]
+enum Reply {
+    Update { len: usize },
+    Error { message: String },
+}
 
-fn main() {
-    println!("Beginning main");
+fn main() -> io::Result<()> {
+    let mut view = RustView::new();
+    let stdin = io::stdin().lock();
+    let mut stdout = BufWriter::new(io::stdout().lock());
 
-    let stdin = io::stdin();
-
-    let mut input = String::new();
-    match stdin.read_line(&mut input) {
-        Ok(n) => {
-            let _view = Box::into_raw(Box::new(RustView::new()));
-            
-            //println!("{} bytes read", n);
-            //println!("{}", input);
-            process::exit(0);
-        }
-        Err(error) => {
-            println!("error: {}", error);
-            process::exit(0);
-        }
+    // Runs until the frontend closes stdin.
+    for line in stdin.lines() {
+        let reply = match serde_json::from_str::<Request>(&line?) {
+            Ok(Request::Insert { chars }) => {
+                view.insert(&chars);
+                Reply::Update { len: view.len() }
+            }
+            Ok(Request::DeleteBackward) => {
+                view.delete_backward();
+                Reply::Update { len: view.len() }
+            }
+            Err(err) => Reply::Error { message: err.to_string() },
+        };
+        serde_json::to_writer(&mut stdout, &reply)?;
+        stdout.write_all(b"\n")?;
+        // Flush per reply: the frontend is waiting on it.
+        stdout.flush()?;
     }
+    Ok(())
 }

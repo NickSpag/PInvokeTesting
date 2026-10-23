@@ -243,3 +243,44 @@ Step 02's escape demo reads differently under the newer compiler: C# 13 allows
 a ref struct in an `async` method as long as it isn't held across an `await`,
 so that error is now `CS4007: Instance of type 'TextBorrow' cannot be preserved
 across 'await' or 'yield' boundary`.
+
+## Benchmarks: the question the project started with
+
+PInvokeTesting was written in 2020 to find out whether driving the Rust view
+in-process beats xi's usual setup of a separate process speaking JSON over
+stdin and stdout. The 2020 benchmarks couldn't answer it: the Rust binary
+exited after reading one line, nothing ever read a reply, and the two
+benchmarks timed different operations.
+
+Now both sides do the same work per operation — type a character and backspace
+it, so the text never grows, with each edit answered by the new length:
+
+- **`InProcess`**: two P/Invoke calls, each running the update callback into
+  C#, then reading the length.
+- **`OverPipe`**: two JSON round trips to `ffi_test_bin`, which reads one
+  request per line, edits the same `RustView`, and writes a reply. The C# side
+  uses the `System.Text.Json` source generator; the Rust side uses `serde_json`.
+
+Run with `dotnet run -c Release -- bench`. On an Apple M4, .NET 11 RC2:
+
+| Method    | Mean         | Allocated | Ratio |
+|---------- |-------------:|----------:|------:|
+| InProcess |     44.46 ns |         - |  1.00 |
+| OverPipe  | 19,349.41 ns |    1360 B |   435 |
+
+About 435 times faster, with no allocation at all. But 19 µs for two edits
+still fits about 800 keystrokes into a single 60 Hz frame, so for typing the
+pipe was never the bottleneck. What the gap does matter for is the traffic that
+is many small requests: xi asks its frontend to measure text widths, and
+in-process that's a function call rather than a round trip.
+
+Two things changed along the way:
+
+- **`PublishAot` is now set only when publishing for a runtime.** Set
+  unconditionally, it writes NativeAOT's feature switches into *every* build's
+  runtimeconfig, `IsDynamicCodeSupported: false` among them. `dotnet run` then
+  runs on the JIT while behaving as if it were AOT, and BenchmarkDotNet, which
+  generates code at runtime, refused to run.
+- **BenchmarkDotNet stays out of the NativeAOT build.** It needs the JIT anyway,
+  and leaving it out takes the published executable from about 40 MB to 3.5 MB.
+  The pipe check still runs there: the source-generated JSON works under AOT.
