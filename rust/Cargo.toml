@@ -7,12 +7,13 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-libc = "*"
 
 [lib]
-name = "_ffi_test"
+name = "ffi_test"
 path = "src/lib.rs"
-crate-type = ["dylib"]
+# cdylib, not dylib: dylib exports Rust's unstable ABI for other Rust crates,
+# cdylib is the C-ABI shared library a non-Rust caller links against.
+crate-type = ["cdylib"]
 
 [[bin]]
 name = "ffi_test_bin"

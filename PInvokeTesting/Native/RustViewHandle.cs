@@ -1,21 +1,57 @@
-﻿using System;
+using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 
 namespace PInvokeTesting
 {
-    public class RustView : IDisposable
+    public unsafe class RustView : IDisposable
     {
-        RustViewHandle _rustView;
+        readonly RustViewHandle _rustView;
+
+        /// <summary>Raised by Rust after every edit, on the thread that made it.</summary>
+        public event Action<string> Updated;
 
         public RustView()
         {
             _rustView = RustBindings.CreateView();
+            if (_rustView.IsInvalid)
+                throw new InvalidOperationException("create_view returned null");
+
+            // Rust holds this as an opaque pointer and hands it back to OnUpdate.
+            // Weak, so the registration alone doesn't keep the view alive.
+            // The SafeHandle owns it, so it's freed with the view even when nobody disposes.
+            _rustView.Owner = GCHandle.Alloc(this, GCHandleType.Weak);
+            RustBindings.SetUpdateCallback(_rustView, &OnUpdate, GCHandle.ToIntPtr(_rustView.Owner));
         }
 
-        public void Insert(string text)
+        public void Insert(string text) => Insert(Encoding.UTF8.GetBytes(text));
+
+        public void Insert(ReadOnlySpan<byte> utf8)
         {
-            RustBindings.Insert(_rustView, text);
+            var status = RustBindings.InsertUtf8(_rustView, utf8);
+            if (status == RustBindings.InvalidUtf8)
+                throw new ArgumentException("text is not valid UTF-8", nameof(utf8));
+            if (status != RustBindings.Ok)
+                throw new InvalidOperationException($"insert_text failed with status {status}");
+        }
+
+        /// <summary>Copies the text out, so nothing outlives Rust's buffer.</summary>
+        public string Text => Encoding.UTF8.GetString(RustBindings.BorrowText(_rustView));
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        static void OnUpdate(IntPtr userData, byte* text, nuint len)
+        {
+            // An exception may not cross back into Rust either.
+            try
+            {
+                if (GCHandle.FromIntPtr(userData).Target is RustView view)
+                    view.Updated?.Invoke(Encoding.UTF8.GetString(text, checked((int)len)));
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Update handler threw: {ex}");
+            }
         }
 
         public void Dispose()
@@ -30,31 +66,17 @@ namespace PInvokeTesting
         public RustViewHandle() : base(IntPtr.Zero, true)
         { }
 
+        /// <summary>The managed RustView that Rust passes back to the update callback.</summary>
+        internal GCHandle Owner;
+
         public override bool IsInvalid => handle == IntPtr.Zero;
-
-        public string AsString()
-        {
-            int len = 0;
-
-            while (Marshal.ReadByte(handle, len) != 0)
-            {
-                len++;
-            }
-
-            byte[] buffer = new byte[len];
-
-            Marshal.Copy(handle, buffer, 0, buffer.Length);
-
-            return Encoding.UTF8.GetString(buffer);
-        }
 
         protected override bool ReleaseHandle()
         {
-            if (!IsInvalid)
-            {
-                RustBindings.FreeView(handle);
-            }
-
+            // Free the view first: after this Rust can no longer call back with Owner.
+            RustBindings.FreeView(handle);
+            if (Owner.IsAllocated)
+                Owner.Free();
             return true;
         }
     }

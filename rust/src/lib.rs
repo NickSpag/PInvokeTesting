@@ -1,39 +1,83 @@
-extern crate libc;
-
 mod view;
 
-use libc::c_char;
-use std::ffi::CStr;
-use view::RustView;
+use std::ffi::c_void;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::Ordering;
+use view::{RustView, UpdateCallback, LIVE_VIEWS};
 
-#[no_mangle]
-pub extern "C" fn insert_text(ptr: *mut RustView, text: *const c_char) {
-    let view = unsafe{
-        assert!(!ptr.is_null());
-        &mut *ptr
-    };
-    
-    let text = unsafe{
-        assert!(!text.is_null());
-        CStr::from_ptr(text)
-    };
+/// Status codes returned across the boundary instead of panicking through it.
+pub const FFI_OK: i32 = 0;
+pub const FFI_NULL_ARGUMENT: i32 = 1;
+pub const FFI_INVALID_UTF8: i32 = 2;
+pub const FFI_PANIC: i32 = 3;
 
-    let text_str = text.to_str().unwrap();
-    view.insert(text_str)
+/// Unwinding out of an `extern "C"` fn is undefined behaviour (it aborts on
+/// Rust 1.81+), so every export runs its body through this.
+fn guarded(body: impl FnOnce() -> i32) -> i32 {
+    catch_unwind(AssertUnwindSafe(body)).unwrap_or(FFI_PANIC)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn create_view() -> *mut RustView {
-    println!("created");
-    Box::into_raw(Box::new(RustView::new()))
+pub extern "C" fn create_view() -> *mut RustView {
+    catch_unwind(|| Box::into_raw(Box::new(RustView::new()))).unwrap_or(std::ptr::null_mut())
 }
 
+/// Takes the view back from C#. Must be called exactly once per view.
 #[no_mangle]
-pub extern "C" fn free_view(ptr: *mut RustView) {
+pub unsafe extern "C" fn free_view(ptr: *mut RustView) {
     if ptr.is_null() {
         return
     }
-    unsafe {
-        Box::from_raw(ptr);
+    let _ = catch_unwind(AssertUnwindSafe(|| drop(Box::from_raw(ptr))));
+}
+
+/// Takes a pointer and length rather than a NUL-terminated string, so the text
+/// may contain NULs and the caller never has to append one.
+#[no_mangle]
+pub unsafe extern "C" fn insert_text(ptr: *mut RustView, text: *const u8, len: usize) -> i32 {
+    guarded(|| {
+        if ptr.is_null() || (text.is_null() && len != 0) {
+            return FFI_NULL_ARGUMENT;
+        }
+        let view = &mut *ptr;
+        let bytes = if len == 0 { &[][..] } else { std::slice::from_raw_parts(text, len) };
+        match std::str::from_utf8(bytes) {
+            Ok(text_str) => {
+                view.insert(text_str);
+                FFI_OK
+            }
+            Err(_) => FFI_INVALID_UTF8,
+        }
+    })
+}
+
+/// Lends the view's UTF-8 bytes. The pointer is valid only until the next call
+/// that mutates or frees the view: an edit may reallocate the String.
+#[no_mangle]
+pub unsafe extern "C" fn view_text(ptr: *const RustView, out_len: *mut usize) -> *const u8 {
+    if ptr.is_null() || out_len.is_null() {
+        return std::ptr::null();
     }
+    let text = (*ptr).text();
+    *out_len = text.len();
+    text.as_ptr()
+}
+
+/// Registers a callback run after every edit, or clears it when `callback` is null.
+#[no_mangle]
+pub unsafe extern "C" fn set_update_callback(
+    ptr: *mut RustView,
+    callback: Option<UpdateCallback>,
+    user_data: *mut c_void,
+) -> i32 {
+    if ptr.is_null() {
+        return FFI_NULL_ARGUMENT;
+    }
+    (*ptr).set_on_update(callback.map(|cb| (cb, user_data)));
+    FFI_OK
+}
+
+#[no_mangle]
+pub extern "C" fn live_views() -> usize {
+    LIVE_VIEWS.load(Ordering::SeqCst)
 }

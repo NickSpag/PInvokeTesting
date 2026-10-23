@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Runtime.InteropServices;
 
 namespace PInvokeTesting
@@ -7,9 +7,15 @@ namespace PInvokeTesting
     /// I want direct access to the rust View. Giving it a callback, so that it can directly send notifications like Update/ScrollTo/etc
     /// </summary>
 
-    public static class RustBindings
+    public static unsafe class RustBindings
     {
-        private const string NativeLibrary = "/Users/nickspagnola/Projects/PInvokeTesting/rust/target/release/lib_ffi_test.dylib";
+        // Resolved next to the executable; the csproj copies the dylib there.
+        private const string NativeLibrary = "ffi_test";
+
+        public const int Ok = 0;
+        public const int NullArgument = 1;
+        public const int InvalidUtf8 = 2;
+        public const int Panic = 3;
 
         [DllImport(NativeLibrary, EntryPoint = "create_view", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
         private static extern RustViewHandle _create_view();
@@ -17,14 +23,35 @@ namespace PInvokeTesting
         [DllImport(NativeLibrary, EntryPoint = "free_view", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
         private static extern void _free_view(IntPtr view);
 
-        [DllImport(NativeLibrary, EntryPoint = "insert", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-        private static extern void _insert(RustViewHandle view, string text);
+        [DllImport(NativeLibrary, EntryPoint = "insert_text", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int _insert_text(RustViewHandle view, byte* text, nuint len);
+
+        [DllImport(NativeLibrary, EntryPoint = "view_text", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+        private static extern byte* _view_text(RustViewHandle view, out nuint len);
+
+        [DllImport(NativeLibrary, EntryPoint = "set_update_callback", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int _set_update_callback(RustViewHandle view, delegate* unmanaged[Cdecl]<IntPtr, byte*, nuint, void> callback, IntPtr userData);
+
+        [DllImport(NativeLibrary, EntryPoint = "live_views", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
+        private static extern nuint _live_views();
 
 
-        public static void Insert(RustViewHandle view, string text)
+        public static int InsertUtf8(RustViewHandle view, ReadOnlySpan<byte> utf8)
         {
-            _insert(view, text);
+            fixed (byte* text = utf8)
+            {
+                return _insert_text(view, text, (nuint)utf8.Length);
+            }
         }
+
+        public static ReadOnlySpan<byte> BorrowText(RustViewHandle view)
+        {
+            var text = _view_text(view, out var len);
+            return text == null ? default : new ReadOnlySpan<byte>(text, checked((int)len));
+        }
+
+        public static int SetUpdateCallback(RustViewHandle view, delegate* unmanaged[Cdecl]<IntPtr, byte*, nuint, void> callback, IntPtr userData)
+            => _set_update_callback(view, callback, userData);
 
         public static void FreeView(IntPtr viewHandle)
         {
@@ -32,6 +59,8 @@ namespace PInvokeTesting
         }
 
         public static RustViewHandle CreateView() => _create_view();
+
+        public static int LiveViews => checked((int)_live_views());
 
     }
 }
