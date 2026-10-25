@@ -284,3 +284,55 @@ Two things changed along the way:
 - **BenchmarkDotNet stays out of the NativeAOT build.** It needs the JIT anyway,
   and leaving it out takes the published executable from about 40 MB to 3.5 MB.
   The pipe check still runs there: the source-generated JSON works under AOT.
+
+## Lapce's rope, alongside the toy chunks
+
+[Lapce](https://github.com/lapce/lapce) is xi's successor in practice: it keeps
+xi's rope (as the maintained fork `lapce-xi-rope`) but drops xi's process split.
+Its UI process holds the rope and edits it with direct calls, and only files,
+language servers and plugins sit behind a boundary, which on a local workspace
+is a thread rather than a process. That is the in-process answer this project
+was testing for, so the rope is now here too, next to the original:
+
+- **Rust:** `rope.rs` wraps `lapce_xi_rope::Rope` with the same patterns as
+  `RustView`: a boxed handle, status codes, panics caught at the boundary,
+  `# Safety` on every export. Edits are Lapce's one primitive, replacing a byte
+  range, checked to fall on character boundaries.
+- **One call for all the leaves.** `rope_chunks` writes every leaf's pointer and
+  length into a buffer C# provides, where `RustView` needs one P/Invoke per chunk.
+- **C#:** `RopeView` and `RopeHandle`, and `TextBorrow` now works over either
+  store through a small `NativeTextHandle` base class: same lease, same spans.
+  No update callback, since Lapce's UI owns the rope and needs no one to tell it
+  what it just did.
+- `RustView`, its benchmarks and the JSON pipe are unchanged, so the
+  comparisons below are against the same code as before.
+
+Edits (type a character and backspace it; Apple M4, .NET 11 RC2):
+
+| Method        | Mean         | Allocated (.NET) | Ratio |
+|-------------- |-------------:|-----------------:|------:|
+| InProcess     |     45.15 ns |                - |  1.00 |
+| RopeInProcess |    652.25 ns |                - | 14.45 |
+| OverPipe      | 19,464.47 ns |           1360 B |   431 |
+
+The rope is about 14 times slower to edit than the toy chunks: each edit
+rebuilds a path of its shared tree (O(log n), allocating on the Rust heap,
+which BenchmarkDotNet doesn't see). That's what buys cheap snapshots and undo.
+It is still 30 times faster than one trip over the pipe.
+
+Reading the whole text back:
+
+| Read            | Size   | 16-byte chunks          | Lapce's rope           | Faster |
+|---------------- |-------:|------------------------:|-----------------------:|-------:|
+| Walk in place   | 1 KB   |    1.5 µs,   5 KB alloc |  0.11 µs,  0.2 KB alloc |    14× |
+| Walk in place   | 64 KB  |     98 µs, 328 KB alloc |   1.6 µs,    5 KB alloc |    60× |
+| Walk in place   | 1 MB   |    3.1 ms, 5.2 MB alloc |    27 µs,   82 KB alloc |   115× |
+| Copy to string  | 1 KB   |    6.7 µs,  12 KB alloc |  0.43 µs,  2.5 KB alloc |    15× |
+| Copy to string  | 64 KB  |    1.1 ms, 933 KB alloc |    48 µs,  141 KB alloc |    22× |
+| Copy to string  | 1 MB   |     29 ms,  15 MB alloc |   1.6 ms,  3.7 MB alloc |    18× |
+
+Almost all of that is leaf size: a 1 MB document is 65,536 toy chunks but
+about 1,000 rope leaves, and the read costs about the same per chunk either
+way. What's left on the table: building the `ReadOnlySequence` still allocates
+two objects per leaf, and the string copy decodes through intermediate buffers
+(3.7 MB allocated to produce a 2 MB string).

@@ -33,6 +33,7 @@
   </ItemGroup>
   <ItemGroup Condition="'$(PublishAot)' == 'true'">
     <Compile Remove="Benchmarks/InsertBenchmarks.cs" />
+    <Compile Remove="Benchmarks/ReadBenchmarks.cs" />
   </ItemGroup>
   <ItemGroup>
     <DirectPInvoke Include="ffi_test" />
